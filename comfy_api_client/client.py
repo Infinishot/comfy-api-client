@@ -283,7 +283,6 @@ class ComfyUIAPIClient:
                 f"ws://{self.comfy_host}/ws?clientId={client_id}"
             ) as websocket:
                 async for message in websocket:
-                    print(message)
                     if isinstance(message, str):
                         message = json.loads(message)
                         if message["type"] == "executing":
