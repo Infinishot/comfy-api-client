@@ -11,7 +11,7 @@ from pathlib import Path
 from PIL import Image
 from safetensors.numpy import save_file
 from comfy_api_client import utils
-from comfy_api_client.client import ComfyUIAPIClient
+from comfy_api_client.client import create_client
 
 
 COMFY_INSTALL_LOCATION = "comfyui"
@@ -117,8 +117,9 @@ async def httpx_client():
 
 
 @pytest_asyncio.fixture
-async def comfyui_client(httpx_client):
-    yield ComfyUIAPIClient(COMFY_HOST, httpx_client)
+async def comfyui_client():
+    async with create_client(COMFY_HOST) as client:
+        yield client
 
 
 @pytest_asyncio.fixture(autouse=True)

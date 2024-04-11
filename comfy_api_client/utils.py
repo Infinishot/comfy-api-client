@@ -1,3 +1,6 @@
+import asyncio
+from functools import wraps
+import json
 import random
 import requests
 import time
@@ -33,6 +36,45 @@ def image_to_buffer(image: Image, format="jpeg"):
     image.save(buffer, format=format)
     buffer.seek(0)
     return buffer
+
+
+def retry_fn(fn, retries=3, delay=0.5, backoff=2):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        for i in range(retries):
+            try:
+                return fn(*args, **kwargs)
+            except Exception:
+                if i == retries - 1:
+                    raise
+
+                time.sleep(delay * backoff**i)
+
+    return wrapper
+
+
+def async_retry_fn(fn, retries=3, delay=0.5, backoff=2):
+    @wraps(fn)
+    async def wrapper(*args, **kwargs):
+        for i in range(retries):
+            try:
+                return await fn(*args, **kwargs)
+            except Exception:
+                if i == retries - 1:
+                    raise
+
+                await asyncio.sleep(delay * backoff**i)
+
+    return wrapper
+
+
+async def load_json_iter(it, ignore_non_string):
+    async for data in it:
+        if isinstance(data, str):
+            yield json.loads(data)
+        else:
+            if not ignore_non_string:
+                raise ValueError(f"Only string data is allowed but got {type(data)}")
 
 
 def _replace_dict_values_recursively(

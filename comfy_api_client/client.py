@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 import json
 import io
 import urllib.parse
+import warnings
 import httpx
 
 from typing import ContextManager, Literal
@@ -97,6 +98,11 @@ class ComfyUIAPIClient:
         self.comfy_host = comfy_host
         self.client = client
 
+        self.client_id = uuid.uuid4().hex
+
+        self.is_websocket_handler_running = False
+        self.futures = {}
+
     async def get_index(self):
         response = await self.client.get(f"http://{self.comfy_host}")
         response.raise_for_status()
@@ -182,7 +188,7 @@ class ComfyUIAPIClient:
         filename: str,
         subfolder: str | None = None,
         type: ImageTypes | None = None,
-    ) -> Image | None:
+    ) -> ImageItem | None:
         params = {
             "filename": filename,
         }
@@ -281,68 +287,84 @@ class ComfyUIAPIClient:
             running=list(map(parse_queue_entry, data["queue_running"])),
         )
 
-    async def _poll_prompt(self, client_id, future):
+    async def fetch_results(self, prompt_id: str) -> PromptResult:
         output_images = []
-        prompt_id = None
+
+        history = await self.get_history(prompt_id=prompt_id)
+
+        assert prompt_id in history
+
+        result = history[prompt_id]
+
+        for output in result["outputs"].values():
+            for image in output["images"]:
+                image_item = await self.retrieve_image(
+                    image["filename"],
+                    subfolder=image["subfolder"],
+                    type=image["type"],
+                )
+
+                output_images.append(image_item)
+
+        return PromptResult(prompt_id=prompt_id, output_images=output_images)
+
+    async def get_future(self, prompt_id: str):
+        return self.futures.get(prompt_id)
+
+    async def get_future_with_retry(self, prompt_id: str):
+        get_future = utils.async_retry_fn(self.get_future)
+        return await get_future(prompt_id)
+
+    async def start_websocket_handler(self):
+        if self.is_websocket_handler_running:
+            warnings.warn("Websocket handler is already running.")
+            return
+
+        self.is_websocket_handler_running = True
 
         try:
             async with websockets.connect(
-                f"ws://{self.comfy_host}/ws?clientId={client_id}"
+                f"ws://{self.comfy_host}/ws?clientId={self.client_id}"
             ) as websocket:
-                async for message in websocket:
-                    if isinstance(message, str):
-                        message = json.loads(message)
-                        if message["type"] == "executing":
-                            data = message["data"]
-                            if data["node"] is None:
-                                prompt_id = data["prompt_id"]
-                                break
+                async for message in utils.load_json_iter(
+                    websocket, ignore_non_string=True
+                ):
+                    if message["type"] == "executing":
+                        data = message["data"]
+                        if data["node"] is None:
+                            prompt_id = data["prompt_id"]
 
-            assert prompt_id is not None
+                            # The websocket might already return results before the enqueueing request
+                            # has returned and the future has been assigned.
+                            # We therefore query for the availability of the future with an exponential backoff.
+                            future = await self.get_future_with_retry(prompt_id)
 
-            history = await self.get_history(prompt_id=prompt_id)
+                            assert future is not None
 
-            assert prompt_id in history
-
-            result = history[prompt_id]
-
-            for output in result["outputs"].values():
-                for image in output["images"]:
-                    image_item = await self.retrieve_image(
-                        image["filename"],
-                        subfolder=image["subfolder"],
-                        type=image["type"],
-                    )
-
-                    output_images.append(image_item)
-
-        except Exception as e:
-            future.set_exception(e)
-            return
-
-        future.set_result(
-            PromptResult(prompt_id=prompt_id, output_images=output_images)
-        )
+                            try:
+                                future.set_result(await self.fetch_results(prompt_id))
+                            except Exception as e:
+                                future.set_exception(e)
+        finally:
+            self.is_websocket_handler_running = False
 
     async def enqueue_workflow(
         self, workflow: dict, return_future: bool = True
     ) -> PromptResponse:
-        client_id = uuid.uuid4().hex
-
         if return_future:
             loop = asyncio.get_event_loop()
             future = loop.create_future()
-            asyncio.create_task(self._poll_prompt(client_id, future))
 
         response = await self.client.post(
             f"http://{self.comfy_host}/prompt",
-            json={"prompt": workflow, "client_id": client_id},
+            json={"prompt": workflow, "client_id": self.client_id},
         )
         response.raise_for_status()
 
         prompt_info = PromptResponse(**response.json())
 
         if return_future:
+            self.futures[prompt_info.prompt_id] = future
             prompt_info.future = future
 
         return prompt_info
@@ -384,6 +406,23 @@ class ComfyUIAPIClient:
 
 
 @asynccontextmanager
-async def create_client(comfy_host: str) -> ContextManager[ComfyUIAPIClient]:
+async def create_client(
+    comfy_host: str, start_websocket_handler: bool = True
+) -> ContextManager[ComfyUIAPIClient]:
     async with httpx.AsyncClient() as client:
-        yield ComfyUIAPIClient(comfy_host, client)
+        client = ComfyUIAPIClient(comfy_host, client)
+
+        if start_websocket_handler:
+            ws_task = asyncio.create_task(client.start_websocket_handler())
+        else:
+            ws_task = None
+
+        try:
+            yield client
+        finally:
+            if ws_task is not None:
+                ws_task.cancel()
+                try:
+                    await ws_task
+                except asyncio.CancelledError:
+                    pass

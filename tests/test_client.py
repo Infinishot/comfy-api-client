@@ -170,7 +170,7 @@ async def test_enqueue_workflow_return_future(comfyui_client, dummy_workflow):
         dummy_workflow, return_future=True
     )
 
-    result = await prompt_info.future
+    result = await asyncio.wait_for(prompt_info.future, timeout=3)
 
     assert result.prompt_id == prompt_info.prompt_id
     assert len(result.output_images) == 1
