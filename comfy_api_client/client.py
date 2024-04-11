@@ -1,13 +1,14 @@
 from asyncio import Future
 import asyncio
+from contextlib import asynccontextmanager
 import json
 import io
 import urllib.parse
+import httpx
 
-from typing import Literal
+from typing import ContextManager, Literal
 import uuid
 from pydantic import BaseModel, RootModel, validate_call
-from httpx import AsyncClient
 
 from PIL.Image import Image
 from PIL import Image as ImageFactory
@@ -92,9 +93,15 @@ class PromptResult(BaseModel):
 
 
 class ComfyUIAPIClient:
-    def __init__(self, comfy_host: str, client: AsyncClient):
+    def __init__(self, comfy_host: str, client: httpx.AsyncClient):
         self.comfy_host = comfy_host
         self.client = client
+
+    async def get_index(self):
+        response = await self.client.get(f"http://{self.comfy_host}")
+        response.raise_for_status()
+
+        return response.text
 
     @validate_call(validate_return=True)
     async def get_embeddings(self) -> FileList:
@@ -318,7 +325,7 @@ class ComfyUIAPIClient:
         )
 
     async def enqueue_workflow(
-        self, workflow: dict, return_future: bool = False
+        self, workflow: dict, return_future: bool = True
     ) -> PromptResponse:
         client_id = uuid.uuid4().hex
 
@@ -374,3 +381,9 @@ class ComfyUIAPIClient:
             f"http://{self.comfy_host}/history", json={"delete": prompt_ids}
         )
         response.raise_for_status()
+
+
+@asynccontextmanager
+async def create_client(comfy_host: str) -> ContextManager[ComfyUIAPIClient]:
+    async with httpx.AsyncClient() as client:
+        yield ComfyUIAPIClient(comfy_host, client)

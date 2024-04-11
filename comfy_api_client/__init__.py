@@ -1,4 +1,4 @@
-from comfy_api_client.client import ComfyUIAPIClient
+from comfy_api_client.client import ComfyUIAPIClient, create_client
 
 
-__all__ = ["ComfyUIAPIClient"]
+__all__ = ["ComfyUIAPIClient", "create_client"]

@@ -154,7 +154,9 @@ async def test_get_queue_pending(comfyui_client, dummy_workflow):
 
 @pytest.mark.asyncio
 async def test_enqueue_workflow(comfyui_client, dummy_workflow):
-    prompt_info = await comfyui_client.enqueue_workflow(dummy_workflow)
+    prompt_info = await comfyui_client.enqueue_workflow(
+        dummy_workflow, return_future=False
+    )
 
     assert prompt_info.prompt_id
 

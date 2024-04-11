@@ -1,8 +1,11 @@
+import random
 import requests
 import time
 import io
 
 from PIL.Image import Image
+
+from comfy_api_client import constants
 
 
 def check_connection(url, delay=0.5, timeout=10):
@@ -30,3 +33,64 @@ def image_to_buffer(image: Image, format="jpeg"):
     image.save(buffer, format=format)
     buffer.seek(0)
     return buffer
+
+
+def _replace_dict_values_recursively(
+    dictionary: dict, target_key: list[str], new_value, start_at_root=False, copy=False
+):
+    if not target_key:
+        return new_value
+
+    if not isinstance(dictionary, dict):
+        return dictionary
+
+    if copy:
+        dictionary = dict(dictionary)
+
+    for key in dictionary.keys():
+        if key == target_key[0]:
+            dictionary[key] = _replace_dict_values_recursively(
+                dictionary[key],
+                target_key[1:],
+                new_value,
+                start_at_root=True,
+                copy=copy,
+            )
+        elif not start_at_root:
+            dictionary[key] = _replace_dict_values_recursively(
+                dictionary[key],
+                target_key,
+                new_value,
+                start_at_root=start_at_root,
+                copy=copy,
+            )
+
+    return dictionary
+
+
+def replace_dict_values(
+    dictionary: dict, key: str | list[str], new_value, start_at_root=False, copy=False
+):
+    if isinstance(key, str):
+        key = key.split(".")
+
+    return _replace_dict_values_recursively(
+        dictionary, key, new_value, copy=copy, start_at_root=start_at_root
+    )
+
+
+def replace_noise_seeds(workflow: dict, seed: int, noise_keys: list[str] | None = None):
+    if noise_keys is None:
+        noise_keys = constants.NOISE_KEYS
+
+    for noise_key in noise_keys:
+        workflow = replace_dict_values(
+            workflow, ["inputs", noise_key], seed, copy=True, start_at_root=False
+        )
+
+    return workflow
+
+
+def randomize_noise_seeds(workflow: dict, noise_keys: list[str] | None = None):
+    seed = random.randint(0, 2**32 - 1)
+    return replace_noise_seeds(workflow, seed, noise_keys=noise_keys)

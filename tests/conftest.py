@@ -107,7 +107,7 @@ def dummy_image():
 
 @pytest.fixture()
 def dummy_workflow():
-    return json.loads(Path("tests/fixtures/workflow.json").read_text())
+    return json.loads(Path("tests/fixtures/dummy_workflow.json").read_text())
 
 
 @pytest_asyncio.fixture
