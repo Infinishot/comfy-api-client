@@ -1,10 +1,7 @@
 import asyncio
 from pathlib import Path
 import pytest
-import requests
 
-from httpx import HTTPStatusError
-from comfy_api_client import utils
 from conftest import COMFY_INSTALL_LOCATION
 
 

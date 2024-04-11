@@ -16,7 +16,7 @@ def check_connection(url, delay=0.5, timeout=10):
                 return True
 
             return False
-        except requests.RequestException as e:
+        except requests.RequestException:
             pass
 
         # Wait for the specified delay before retrying
