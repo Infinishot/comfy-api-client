@@ -441,4 +441,4 @@ async def create_client(
             yield client
         finally:
             if start_websocket_handler:
-                client.stop_websocket_handler()
+                await client.stop_websocket_handler()
