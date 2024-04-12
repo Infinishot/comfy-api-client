@@ -296,6 +296,9 @@ class ComfyUIAPIClient:
         result = history[prompt_id]
 
         for output in result["outputs"].values():
+            if "images" not in output:
+                continue
+
             for image in output["images"]:
                 image_item = await self.retrieve_image(
                     image["filename"],
