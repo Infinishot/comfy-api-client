@@ -98,9 +98,8 @@ class ComfyUIAPIClient:
         self.comfy_host = comfy_host
         self.client = client
 
-        self.client_id = uuid.uuid4().hex
-
-        self.is_websocket_handler_running = False
+        self.comfy_client_id = uuid.uuid4().hex
+        self.websocket_handler_task = None
         self.futures = {}
 
     async def get_index(self):
@@ -315,16 +314,10 @@ class ComfyUIAPIClient:
         get_future = utils.async_retry_fn(self.get_future)
         return await get_future(prompt_id)
 
-    async def start_websocket_handler(self):
-        if self.is_websocket_handler_running:
-            warnings.warn("Websocket handler is already running.")
-            return
-
-        self.is_websocket_handler_running = True
-
+    async def websocket_handler(self):
         try:
             async with websockets.connect(
-                f"ws://{self.comfy_host}/ws?clientId={self.client_id}"
+                f"ws://{self.comfy_host}/ws?clientId={self.comfy_client_id}"
             ) as websocket:
                 async for message in utils.load_json_iter(
                     websocket, ignore_non_string=True
@@ -346,18 +339,47 @@ class ComfyUIAPIClient:
                             except Exception as e:
                                 future.set_exception(e)
         finally:
-            self.is_websocket_handler_running = False
+            self.websocket_handler_task = None
+
+    @property
+    def is_websocket_handler_running(self):
+        return self.websocket_handler_task is not None
+
+    async def start_websocket_handler(self):
+        if self.is_websocket_handler_running:
+            warnings.warn("Websocket handler is already running")
+            return
+
+        self.websocket_handler_task = asyncio.create_task(self.websocket_handler())
+
+    async def stop_websocket_handler(self):
+        if not self.is_websocket_handler_running:
+            warnings.warn("Websocket handler is not running")
+            return
+
+        self.websocket_handler_task.cancel()
+
+        try:
+            await self.websocket_handler_task
+        except asyncio.CancelledError:
+            pass
 
     async def enqueue_workflow(
         self, workflow: dict, return_future: bool = True
     ) -> PromptResponse:
         if return_future:
+            if not self.is_websocket_handler_running:
+                warnings.warn(
+                    "enqueue_workflow has been called with return_future=True, but the websocket handler is not running. "
+                    "Results might therefore not be received and have to be requested manually."
+                )
+
             loop = asyncio.get_event_loop()
             future = loop.create_future()
 
         response = await self.client.post(
             f"http://{self.comfy_host}/prompt",
-            json={"prompt": workflow, "client_id": self.client_id},
+            json={"prompt": workflow, "client_id": self.comfy_client_id},
         )
         response.raise_for_status()
 
@@ -413,16 +435,10 @@ async def create_client(
         client = ComfyUIAPIClient(comfy_host, client)
 
         if start_websocket_handler:
-            ws_task = asyncio.create_task(client.start_websocket_handler())
-        else:
-            ws_task = None
+            await client.start_websocket_handler()
 
         try:
             yield client
         finally:
-            if ws_task is not None:
-                ws_task.cancel()
-                try:
-                    await ws_task
-                except asyncio.CancelledError:
-                    pass
+            if start_websocket_handler:
+                client.stop_websocket_handler()
