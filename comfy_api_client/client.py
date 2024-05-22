@@ -321,7 +321,7 @@ class ComfyUIAPIClient:
         try:
             async with websockets.connect(
                 f"ws://{self.comfy_host}/ws?clientId={self.comfy_client_id}",
-                **websocket_connect_kwargs
+                **websocket_connect_kwargs,
             ) as websocket:
                 async for message in utils.load_json_iter(
                     websocket, ignore_non_string=True
@@ -349,12 +349,12 @@ class ComfyUIAPIClient:
     def is_websocket_handler_running(self):
         return self.websocket_handler_task is not None
 
-    async def start_websocket_handler(self):
+    async def start_websocket_handler(self, **websocket_connect_kwargs):
         if self.is_websocket_handler_running:
             warnings.warn("Websocket handler is already running")
             return
 
-        self.websocket_handler_task = asyncio.create_task(self.websocket_handler())
+        self.websocket_handler_task = asyncio.create_task(self.websocket_handler(**websocket_connect_kwargs))
 
     async def stop_websocket_handler(self):
         if not self.is_websocket_handler_running:
@@ -433,13 +433,13 @@ class ComfyUIAPIClient:
 
 @asynccontextmanager
 async def create_client(
-    comfy_host: str, start_websocket_handler: bool = True
+    comfy_host: str, start_websocket_handler: bool = True, **websocket_connect_kwargs
 ) -> ContextManager[ComfyUIAPIClient]:
     async with httpx.AsyncClient() as client:
         client = ComfyUIAPIClient(comfy_host, client)
 
         if start_websocket_handler:
-            await client.start_websocket_handler()
+            await client.start_websocket_handler(**websocket_connect_kwargs)
 
         try:
             yield client
