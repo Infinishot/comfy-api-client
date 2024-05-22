@@ -317,10 +317,11 @@ class ComfyUIAPIClient:
         get_future = utils.async_retry_fn(self.get_future)
         return await get_future(prompt_id)
 
-    async def websocket_handler(self):
+    async def websocket_handler(self, **websocket_connect_kwargs):
         try:
             async with websockets.connect(
-                f"ws://{self.comfy_host}/ws?clientId={self.comfy_client_id}"
+                f"ws://{self.comfy_host}/ws?clientId={self.comfy_client_id}",
+                **websocket_connect_kwargs
             ) as websocket:
                 async for message in utils.load_json_iter(
                     websocket, ignore_non_string=True
