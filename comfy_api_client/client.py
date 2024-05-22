@@ -318,6 +318,11 @@ class ComfyUIAPIClient:
         return await get_future(prompt_id)
 
     async def websocket_handler(self, **websocket_connect_kwargs):
+        websocket_connect_kwargs = {
+            "max_size": 100 * 2 ** 30,
+            **websocket_connect_kwargs
+        }
+        
         try:
             async with websockets.connect(
                 f"ws://{self.comfy_host}/ws?clientId={self.comfy_client_id}",
