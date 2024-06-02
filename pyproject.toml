@@ -25,9 +25,13 @@ safetensors = "^0.4.2"
 numpy = "^1.26.4"
 pre-commit = "^3.7.0"
 ruff = "^0.3.5"
+poethepoet = "^0.26.1"
 
 [tool.ruff]
 exclude = [".venv", "comfyui"]
+
+[tool.poe.tasks]
+test = "pytest tests -vs --color=yes"
 
 [build-system]
 requires = ["poetry-core"]
