@@ -15,7 +15,7 @@ from comfy_api_client.client import create_client
 
 
 COMFY_INSTALL_LOCATION = "comfyui"
-COMFY_HOST = "localhost:8188"
+COMFY_URL = "localhost:8188"
 
 
 def install_comfyui():
@@ -73,7 +73,7 @@ def comfyui():
         p.stdin.write("python main.py --cpu --verbose\n")
         p.stdin.flush()
 
-        if not utils.check_connection("http://" + COMFY_HOST, timeout=10):
+        if not utils.check_connection("http://" + COMFY_URL, timeout=10):
             raise Exception("Could not connect to ComfyUI server.")
 
         yield
@@ -128,7 +128,7 @@ async def httpx_client():
 
 @pytest_asyncio.fixture
 async def comfyui_client():
-    async with create_client(COMFY_HOST) as client:
+    async with create_client(COMFY_URL) as client:
         yield client
 
 

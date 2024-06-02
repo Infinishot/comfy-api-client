@@ -103,8 +103,12 @@ class HistorySchema(RootModel):
 
 
 class ComfyUIAPIClient:
-    def __init__(self, comfy_host: str, client: httpx.AsyncClient):
-        self.comfy_host = comfy_host
+    def __init__(self, comfy_url: str, client: httpx.AsyncClient):
+        self.comfy_url = utils.parse_url(comfy_url)
+        
+        if self.comfy_url.scheme not in ["http", "https"]:
+            raise ValueError(f"Provided Comfy URL scheme is not supported: {self.comfy_url.scheme}")
+        
         self.client = client
 
         self.client_id = uuid.uuid4().hex
@@ -112,23 +116,31 @@ class ComfyUIAPIClient:
         self.futures = {}
 
         self.housekeepers = []
+        
+    def endpoint(self, path: str | None = None):
+        base_url = f"{self.comfy_url.scheme}://{self.comfy_url.netloc}"
+        
+        if path is None:
+            return base_url
+        
+        return urllib.parse.urljoin(base_url, path)
 
     async def get_index(self):
-        response = await self.client.get(f"http://{self.comfy_host}")
+        response = await self.client.get(self.endpoint())
         response.raise_for_status()
 
         return response.text
 
     @validate_call(validate_return=True)
     async def get_embeddings(self) -> FileList:
-        response = await self.client.get(f"http://{self.comfy_host}/embeddings")
+        response = await self.client.get(self.endpoint("embeddings"))
         response.raise_for_status()
 
         return response.json()
 
     @validate_call(validate_return=True)
     async def get_extensions(self) -> FileList:
-        response = await self.client.get(f"http://{self.comfy_host}/extensions")
+        response = await self.client.get(self.endpoint("extensions"))
         response.raise_for_status()
 
         return response.json()
@@ -160,7 +172,7 @@ class ComfyUIAPIClient:
         type: ImageTypes = "input",
     ) -> ImageUploadResponse:
         response = await self.client.post(
-            f"http://{self.comfy_host}/upload/image",
+            self.endpoint("/upload/image"),
             data={"overwrite": overwrite, "type": type},
             files=self._prepare_image_upload(name, image, subfolder),
         )
@@ -181,7 +193,7 @@ class ComfyUIAPIClient:
         original_reference["filename"] = original_reference.pop("name")
 
         response = await self.client.post(
-            f"http://{self.comfy_host}/upload/mask",
+            self.endpoint("/upload/mask"),
             data={
                 "overwrite": overwrite,
                 "type": type,
@@ -210,7 +222,7 @@ class ComfyUIAPIClient:
             params["type"] = type
 
         response = await self.client.get(
-            f"http://{self.comfy_host}/view", params=params
+            self.endpoint("/view"), params=params
         )
 
         if response.status_code == 404:
@@ -233,7 +245,7 @@ class ComfyUIAPIClient:
         folder_name_encoded = urllib.parse.quote_plus(folder_name)
 
         response = await self.client.get(
-            f"http://{self.comfy_host}/view_metadata/{folder_name_encoded}",
+            self.endpoint(f"/view_metadata/{folder_name_encoded}"),
             params={"filename": filename},
         )
 
@@ -245,7 +257,7 @@ class ComfyUIAPIClient:
         return response.json()
 
     async def get_system_stats(self) -> SystemStats:
-        response = await self.client.get(f"http://{self.comfy_host}/system_stats")
+        response = await self.client.get(self.endpoint("/system_stats"))
         response.raise_for_status()
 
         return SystemStats(**response.json())
@@ -259,7 +271,7 @@ class ComfyUIAPIClient:
     async def get_history(
         self, prompt_id: str | None = None, max_items: int | None = None
     ) -> dict:
-        endpoint = f"http://{self.comfy_host}/history"
+        endpoint = self.endpoint("/history")
 
         if prompt_id:
             endpoint += f"/{prompt_id}"
@@ -285,7 +297,7 @@ class ComfyUIAPIClient:
         }
 
     async def get_queue(self) -> QueueState:
-        response = await self.client.get(f"http://{self.comfy_host}/queue")
+        response = await self.client.get(self.endpoint("/queue"))
         response.raise_for_status()
 
         data = response.json()
@@ -365,7 +377,7 @@ class ComfyUIAPIClient:
             future = loop.create_future()
 
         response = await self.client.post(
-            f"http://{self.comfy_host}/prompt",
+            self.endpoint("/prompt"),
             json={"prompt": workflow, "client_id": self.client_id},
         )
         response.raise_for_status()
@@ -380,36 +392,36 @@ class ComfyUIAPIClient:
 
     async def clear_queue(self):
         response = await self.client.post(
-            f"http://{self.comfy_host}/queue", json={"clear": True}
+            self.endpoint("/queue"), json={"clear": True}
         )
         response.raise_for_status()
 
     async def cancel_prompts(self, prompt_ids: list[str]):
         response = await self.client.post(
-            f"http://{self.comfy_host}/queue", json={"cancel": prompt_ids}
+            self.endpoint("/queue"), json={"cancel": prompt_ids}
         )
         response.raise_for_status()
 
     async def interrupt_processing(self):
-        response = await self.client.post(f"http://{self.comfy_host}/interrupt")
+        response = await self.client.post(self.endpoint("/interrupt"))
         response.raise_for_status()
 
     async def free_memory(self, unload_models: bool = False, free_memory: bool = False):
         response = await self.client.post(
-            f"http://{self.comfy_host}/free",
+            self.endpoint("/free"),
             json={"unload_models": unload_models, "free_memory": free_memory},
         )
         response.raise_for_status()
 
     async def clear_history(self):
         response = await self.client.post(
-            f"http://{self.comfy_host}/history", json={"clear": True}
+            self.endpoint("/history"), json={"clear": True}
         )
         response.raise_for_status()
 
     async def remove_from_history(self, prompt_ids: list[str]):
         response = await self.client.post(
-            f"http://{self.comfy_host}/history", json={"delete": prompt_ids}
+            self.endpoint("/history"), json={"delete": prompt_ids}
         )
         response.raise_for_status()
 
@@ -460,7 +472,7 @@ class WebsocketComfyClientHousekeeper(BaseComfyClientHousekeeper):
 
         try:
             async with websockets.connect(
-                f"{self.get_protocol()}://{self.client.comfy_host}/ws?clientId={self.client.client_id}",
+                f"{self.get_protocol()}://{self.client.comfy_url.netloc}/ws?clientId={self.client.client_id}",
                 **websocket_connect_kwargs,
             ) as websocket:
                 self.websocket = websocket
@@ -576,12 +588,12 @@ async def create_comfy_client_housekeeper(client, name: str, **housekeeper_kwarg
 
 @asynccontextmanager
 async def create_client(
-    comfy_host: str,
+    comfy_url: str,
     start_housekeeper: Literal["websocket", "http"] | None = "websocket",
     housekeeper_kwargs: dict | None = None,
 ) -> AsyncGenerator[ComfyUIAPIClient, None]:
     async with httpx.AsyncClient() as client:
-        client = ComfyUIAPIClient(comfy_host, client)
+        client = ComfyUIAPIClient(comfy_url, client)
 
         if start_housekeeper is not None:
             await create_comfy_client_housekeeper(

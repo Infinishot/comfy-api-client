@@ -7,7 +7,7 @@ import time
 import io
 
 from PIL.Image import Image
-
+from urllib.parse import urlparse, ParseResult as URLParseResult
 from comfy_api_client import constants
 
 
@@ -136,3 +136,12 @@ def replace_noise_seeds(workflow: dict, seed: int, noise_keys: list[str] | None 
 def randomize_noise_seeds(workflow: dict, noise_keys: list[str] | None = None):
     seed = random.randint(0, 2**32 - 1)
     return replace_noise_seeds(workflow, seed, noise_keys=noise_keys)
+
+
+def parse_url(url: str, default_scheme="http") -> URLParseResult:
+    parsed = urlparse(url)
+    
+    if not parsed.netloc:
+        return parse_url(f"{default_scheme}://{url}")
+    
+    return parsed
