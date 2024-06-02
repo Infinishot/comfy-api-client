@@ -102,6 +102,10 @@ class HistorySchema(RootModel):
     root: dict[str, HistoryItemSchema]
 
 
+class ComfyExecutionError(Exception):
+    pass
+
+
 class ComfyUIAPIClient:
     def __init__(self, comfy_url: str, client: httpx.AsyncClient):
         self.comfy_url = utils.parse_url(comfy_url)
@@ -519,7 +523,7 @@ class WebsocketComfyClientHousekeeper(BaseComfyClientHousekeeper):
         self.is_running = False
 
 
-class HTTPComfyClientHousekeeper(BaseComfyClientHousekeeper):
+class RestAPIComfyClientHousekeeper(BaseComfyClientHousekeeper):
     def __init__(self, client: ComfyUIAPIClient, update_interval: float = 0.5):
         super().__init__(client)
 
@@ -532,17 +536,23 @@ class HTTPComfyClientHousekeeper(BaseComfyClientHousekeeper):
         if not self.is_running:
             return
 
-        completed = await self.client.get_completed_prompts()
+        history = await self.client.get_history()
 
-        for prompt_id, result in completed.items():
+        for prompt_id, result in history.items():
             if prompt_id in self.client.futures:
                 future = await self.client.get_future(prompt_id)
 
                 if future and not future.done():
-                    try:
-                        future.set_result(await self.client.fetch_results(prompt_id))
-                    except Exception as e:
-                        future.set_exception(e)
+                    status = result["status"]
+                    status_msg = status.get("status_str")
+                    
+                    if status_msg == "success":
+                        try:
+                            future.set_result(await self.client.fetch_results(prompt_id))
+                        except Exception as e:
+                            future.set_exception(e)
+                    elif status_msg == "error":
+                        future.set_exception(ComfyExecutionError(f"Prompt failed: {json.dumps(status)}"))
 
         await asyncio.sleep(self.update_interval)
 
@@ -568,7 +578,7 @@ class HTTPComfyClientHousekeeper(BaseComfyClientHousekeeper):
 
 housekeeper_implementations = {
     "websocket": WebsocketComfyClientHousekeeper,
-    "http": HTTPComfyClientHousekeeper,
+    "rest": RestAPIComfyClientHousekeeper,
 }
 
 
@@ -590,7 +600,7 @@ async def create_comfy_client_housekeeper(client, name: str, **housekeeper_kwarg
 async def create_client(
     comfy_url: str,
     http_timeout: float | None = 30.0,
-    start_housekeeper: Literal["websocket", "http"] | None = "websocket",
+    start_housekeeper: Literal["websocket", "rest"] | None = "websocket",
     housekeeper_kwargs: dict | None = None,
 ) -> AsyncGenerator[ComfyUIAPIClient, None]:
     async with httpx.AsyncClient(timeout=http_timeout) as client:
