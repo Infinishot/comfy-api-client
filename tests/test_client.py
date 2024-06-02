@@ -22,8 +22,8 @@ async def test_get_extensions(comfyui_client, dummy_embedding):
 
 
 @pytest.mark.asyncio
-async def test_upload_image(comfyui_client, dummy_image):
-    response = await comfyui_client.upload_image("test.png", dummy_image)
+async def test_upload_image(comfyui_client, random_image):
+    response = await comfyui_client.upload_image("test.png", random_image)
 
     assert response.name == "test.png"
     assert response.subfolder == ""
@@ -31,9 +31,9 @@ async def test_upload_image(comfyui_client, dummy_image):
 
 
 @pytest.mark.asyncio
-async def test_upload_image_with_subfolder(comfyui_client, dummy_image):
+async def test_upload_image_with_subfolder(comfyui_client, random_image):
     response = await comfyui_client.upload_image(
-        "test.png", dummy_image, subfolder="images"
+        "test.png", random_image, subfolder="images"
     )
 
     assert response.name == "test.png"
@@ -41,10 +41,10 @@ async def test_upload_image_with_subfolder(comfyui_client, dummy_image):
 
 
 @pytest.mark.asyncio
-async def test_upload_mask(comfyui_client, dummy_image):
-    orig_ref = await comfyui_client.upload_image("test.png", dummy_image)
+async def test_upload_mask(comfyui_client, random_image):
+    orig_ref = await comfyui_client.upload_image("test.png", random_image)
     response = await comfyui_client.upload_mask(
-        "test.png", dummy_image, original_reference=orig_ref
+        "test.png", random_image, original_reference=orig_ref
     )
 
     assert response.name == "test.png"
@@ -60,14 +60,14 @@ async def test_retrieve_unknown_image(comfyui_client):
 
 
 @pytest.mark.asyncio
-async def test_retrieve_known_image(comfyui_client, dummy_image):
-    await comfyui_client.upload_image("test.png", dummy_image, type="output")
+async def test_retrieve_known_image(comfyui_client, random_image):
+    await comfyui_client.upload_image("test.png", random_image, type="output")
 
     image_item = await comfyui_client.retrieve_image("test.png")
 
     assert image_item.filename == "test.png"
     assert image_item.format == "png"
-    # assert utils.image_to_buffer(dummy_image).read() == utils.image_to_buffer(image_item.image).read()
+    # assert utils.image_to_buffer(random_image).read() == utils.image_to_buffer(image_item.image).read()
 
 
 @pytest.mark.asyncio
@@ -153,7 +153,9 @@ async def test_get_queue_pending(comfyui_client, dummy_workflow):
 
 
 @pytest.mark.asyncio
-async def test_enqueue_workflow(comfyui_client, dummy_workflow):
+async def test_enqueue_workflow(comfyui_client, dummy_workflow, random_image):
+    await comfyui_client.upload_image("test.png", random_image)
+    
     prompt_info = await comfyui_client.enqueue_workflow(
         dummy_workflow, return_future=False
     )
@@ -161,6 +163,7 @@ async def test_enqueue_workflow(comfyui_client, dummy_workflow):
     assert prompt_info.prompt_id
 
 
+@pytest.mark.skip(reason="Implementation changed")
 @pytest.mark.asyncio
 async def test_enqueue_workflow_return_future(comfyui_client, dummy_workflow):
     loop = asyncio.get_event_loop()

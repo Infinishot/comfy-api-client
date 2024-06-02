@@ -111,6 +111,11 @@ def dummy_image():
 
 
 @pytest.fixture()
+def random_image():
+    return Image.fromarray(np.random.randint(0, 255, (256, 256, 3), dtype=np.uint8))
+
+
+@pytest.fixture()
 def dummy_workflow():
     return json.loads(Path("tests/fixtures/dummy_workflow.json").read_text())
 
