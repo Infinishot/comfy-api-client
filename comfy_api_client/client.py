@@ -1,3 +1,4 @@
+import abc
 from asyncio import Future
 import asyncio
 from contextlib import asynccontextmanager
@@ -6,8 +7,7 @@ import io
 import urllib.parse
 import warnings
 import httpx
-
-from typing import ContextManager, Literal
+from typing import AsyncGenerator, Literal
 import uuid
 from pydantic import BaseModel, RootModel, validate_call
 
@@ -93,14 +93,25 @@ class PromptResult(BaseModel):
     output_images: list[ImageItem]
 
 
+# TODO: finish this
+class HistoryItemSchema(BaseModel):
+    prompt: tuple[int, str, dict, dict, list[str]]
+
+
+class HistorySchema(RootModel):
+    root: dict[str, HistoryItemSchema]
+
+
 class ComfyUIAPIClient:
     def __init__(self, comfy_host: str, client: httpx.AsyncClient):
         self.comfy_host = comfy_host
         self.client = client
 
-        self.comfy_client_id = uuid.uuid4().hex
+        self.client_id = uuid.uuid4().hex
         self.websocket_handler_task = None
         self.futures = {}
+
+        self.housekeepers = []
 
     async def get_index(self):
         response = await self.client.get(f"http://{self.comfy_host}")
@@ -264,6 +275,15 @@ class ComfyUIAPIClient:
 
         return response.json()
 
+    async def get_completed_prompts(self):
+        history = await self.get_history()
+
+        return {
+            prompt_id: data
+            for prompt_id, data in history.items()
+            if data.get("status", {}).get("completed")
+        }
+
     async def get_queue(self) -> QueueState:
         response = await self.client.get(f"http://{self.comfy_host}/queue")
         response.raise_for_status()
@@ -317,49 +337,7 @@ class ComfyUIAPIClient:
         get_future = utils.async_retry_fn(self.get_future)
         return await get_future(prompt_id)
 
-    async def websocket_handler(self, **websocket_connect_kwargs):
-        websocket_connect_kwargs = {
-            "max_size": 100 * 2 ** 30,
-            **websocket_connect_kwargs
-        }
-        
-        try:
-            async with websockets.connect(
-                f"ws://{self.comfy_host}/ws?clientId={self.comfy_client_id}",
-                **websocket_connect_kwargs,
-            ) as websocket:
-                async for message in utils.load_json_iter(
-                    websocket, ignore_non_string=True
-                ):
-                    if message["type"] == "executing":
-                        data = message["data"]
-                        if data["node"] is None:
-                            prompt_id = data["prompt_id"]
-
-                            # The websocket might already return results before the enqueueing request
-                            # has returned and the future has been assigned.
-                            # We therefore query for the availability of the future with an exponential backoff.
-                            future = await self.get_future_with_retry(prompt_id)
-
-                            assert future is not None
-
-                            try:
-                                future.set_result(await self.fetch_results(prompt_id))
-                            except Exception as e:
-                                future.set_exception(e)
-        finally:
-            self.websocket_handler_task = None
-
-    @property
-    def is_websocket_handler_running(self):
-        return self.websocket_handler_task is not None
-
-    async def start_websocket_handler(self, **websocket_connect_kwargs):
-        if self.is_websocket_handler_running:
-            warnings.warn("Websocket handler is already running")
-            return
-
-        self.websocket_handler_task = asyncio.create_task(self.websocket_handler(**websocket_connect_kwargs))
+    # @property
 
     async def stop_websocket_handler(self):
         if not self.is_websocket_handler_running:
@@ -377,9 +355,9 @@ class ComfyUIAPIClient:
         self, workflow: dict, return_future: bool = True
     ) -> PromptResponse:
         if return_future:
-            if not self.is_websocket_handler_running:
+            if not any([keeper.is_running for keeper in self.housekeepers]):
                 warnings.warn(
-                    "enqueue_workflow has been called with return_future=True, but the websocket handler is not running. "
+                    "enqueue_workflow has been called with return_future=True, but no housekeeper is running. "
                     "Results might therefore not be received and have to be requested manually."
                 )
 
@@ -388,7 +366,7 @@ class ComfyUIAPIClient:
 
         response = await self.client.post(
             f"http://{self.comfy_host}/prompt",
-            json={"prompt": workflow, "client_id": self.comfy_client_id},
+            json={"prompt": workflow, "client_id": self.client_id},
         )
         response.raise_for_status()
 
@@ -435,19 +413,182 @@ class ComfyUIAPIClient:
         )
         response.raise_for_status()
 
+    def register_housekeeper(self, housekeeper: "BaseComfyClientHousekeeper"):
+        self.housekeepers.append(housekeeper)
+
+    def remove_housekeeper(self, housekeeper: "BaseComfyClientHousekeeper"):
+        self.housekeepers.remove(housekeeper)
+
+
+class BaseComfyClientHousekeeper(abc.ABC):
+    def __init__(self, client: ComfyUIAPIClient):
+        self.client = client
+        self.client.register_housekeeper(self)
+
+    @abc.abstractmethod
+    async def start():
+        pass
+
+    @abc.abstractmethod
+    async def stop():
+        pass
+
+
+class WebsocketComfyClientHousekeeper(BaseComfyClientHousekeeper):
+    def __init__(
+        self,
+        client: ComfyUIAPIClient,
+        use_secure_websocket: bool = False,
+        **websocket_connect_kwargs,
+    ):
+        super().__init__(client)
+
+        self.use_secure_websocket = use_secure_websocket
+        self.run_task = None
+        self.is_running = False
+        self.websocket_connect_kwargs = websocket_connect_kwargs
+        self.websocket = None
+
+    def get_protocol(self):
+        return "wss" if self.use_secure_websocket else "ws"
+
+    async def run(self):
+        websocket_connect_kwargs = {
+            "max_size": 100 * 2**30,
+            **self.websocket_connect_kwargs,
+        }
+
+        try:
+            async with websockets.connect(
+                f"{self.get_protocol()}://{self.client.comfy_host}/ws?clientId={self.client.client_id}",
+                **websocket_connect_kwargs,
+            ) as websocket:
+                self.websocket = websocket
+
+                async for message in utils.load_json_iter(
+                    websocket, ignore_non_string=True
+                ):
+                    if message["type"] == "executing":
+                        data = message["data"]
+                        if data["node"] is None:
+                            prompt_id = data["prompt_id"]
+
+                            # The websocket might already return results before the enqueueing request
+                            # has returned and the future has been assigned.
+                            # We therefore query for the availability of the future with an exponential backoff.
+                            future = await self.client.get_future_with_retry(prompt_id)
+
+                            assert future is not None
+
+                            try:
+                                future.set_result(
+                                    await self.client.fetch_results(prompt_id)
+                                )
+                            except Exception as e:
+                                future.set_exception(e)
+        finally:
+            self.websocket = None
+
+    async def start(self):
+        if self.is_running:
+            return
+
+        self.is_running = True
+        self.run_task = asyncio.get_event_loop().create_task(self.run())
+
+    async def stop(self):
+        if self.websocket is None:
+            warnings.warn("Websocket is not open")
+        else:
+            await self.websocket.close()
+
+        await self.run_task
+
+        self.is_running = False
+
+
+class HTTPComfyClientHousekeeper(BaseComfyClientHousekeeper):
+    def __init__(self, client: ComfyUIAPIClient, update_interval: float = 0.5):
+        super().__init__(client)
+
+        self.update_interval = update_interval
+        self.is_running = False
+        self.current_update_task = None
+        self.thread = None
+
+    async def update(self):
+        if not self.is_running:
+            return
+
+        completed = await self.client.get_completed_prompts()
+
+        for prompt_id, result in completed.items():
+            if prompt_id in self.client.futures:
+                future = await self.client.get_future(prompt_id)
+
+                if future and not future.done():
+                    try:
+                        future.set_result(await self.client.fetch_results(prompt_id))
+                    except Exception as e:
+                        future.set_exception(e)
+
+        await asyncio.sleep(self.update_interval)
+
+        self.current_update_task = asyncio.get_event_loop().create_task(self.update())
+
+    async def start(self):
+        if self.is_running:
+            return
+
+        self.is_running = True
+        self.current_update_task = asyncio.get_event_loop().create_task(self.update())
+
+        self.client.register_housekeeper(self)
+
+    async def stop(self):
+        self.is_running = False
+
+        if self.current_update_task is not None:
+            await self.current_update_task
+
+        self.client.remove_housekeeper(self)
+
+
+housekeeper_implementations = {
+    "websocket": WebsocketComfyClientHousekeeper,
+    "http": HTTPComfyClientHousekeeper,
+}
+
+
+async def create_comfy_client_housekeeper(client, name: str, **housekeeper_kwargs):
+    cls = housekeeper_implementations.get(name)
+
+    if cls is None:
+        raise ValueError(
+            f"Unknown Comfy client housekeeper '{name}'. Valid options are {list(housekeeper_implementations)}"
+        )
+
+    housekeeper = cls(client=client, **housekeeper_kwargs)
+    await housekeeper.start()
+
+    return housekeeper
+
 
 @asynccontextmanager
 async def create_client(
-    comfy_host: str, start_websocket_handler: bool = True, **websocket_connect_kwargs
-) -> ContextManager[ComfyUIAPIClient]:
+    comfy_host: str,
+    start_housekeeper: Literal["websocket", "http"] | None = "websocket",
+    housekeeper_kwargs: dict | None = None,
+) -> AsyncGenerator[ComfyUIAPIClient, None]:
     async with httpx.AsyncClient() as client:
         client = ComfyUIAPIClient(comfy_host, client)
 
-        if start_websocket_handler:
-            await client.start_websocket_handler(**websocket_connect_kwargs)
-
+        if start_housekeeper is not None:
+            await create_comfy_client_housekeeper(
+                client, start_housekeeper, **(housekeeper_kwargs or {})
+            )
         try:
             yield client
         finally:
-            if start_websocket_handler:
-                await client.stop_websocket_handler()
+            for housekeeper in client.housekeepers:
+                await housekeeper.stop()
