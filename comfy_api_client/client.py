@@ -128,7 +128,7 @@ class ComfyUIAPIClient:
         if isinstance(image, str):
             image = ImageFactory.open(image)
 
-        blob = utils.image_to_buffer(image)
+        blob = utils.image_to_buffer(image, format="png")
 
         files = {
             "image": (name, blob, "image/png"),
