@@ -589,11 +589,14 @@ async def create_comfy_client_housekeeper(client, name: str, **housekeeper_kwarg
 @asynccontextmanager
 async def create_client(
     comfy_url: str,
+    http_timeout: float | None = 30.0,
     start_housekeeper: Literal["websocket", "http"] | None = "websocket",
     housekeeper_kwargs: dict | None = None,
 ) -> AsyncGenerator[ComfyUIAPIClient, None]:
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=http_timeout) as client:
         client = ComfyUIAPIClient(comfy_url, client)
+        
+        await client.get_index()
 
         if start_housekeeper is not None:
             await create_comfy_client_housekeeper(
