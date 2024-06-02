@@ -37,6 +37,11 @@ def install_comfyui():
     )
     p.stdin.write("pip install -r requirements.txt\n")
     p.stdin.write("pip install torchsde\n")
+    
+    # Remove ComfyUI's git folder
+    # Otherwise the folder may appear as subrepository
+    p.stdin.write("rm -rf .git\n")
+    
     p.communicate()
     p.wait()
 
