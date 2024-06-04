@@ -516,7 +516,7 @@ class WebsocketComfyClientHousekeeper(BaseComfyClientHousekeeper):
         if self.websocket is None:
             warnings.warn("Websocket is not open")
         else:
-            await self.websocket.close()
+            await self.websocket.close_connection()
 
         await self.run_task
 
