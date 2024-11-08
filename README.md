@@ -18,6 +18,20 @@ pip install comfy-api-client
 
 ## Usage
 
+### Export ComfyUI workflow in API format
+
+ComfyUI has two different workflow formats. The _standard_ format for which contains additional meta data for the UI and a reduced API version which corresponds to the actual execution graph that is send to the backend. Exporting workflows in API format has to be enabled in the developer settings first.
+
+<details>
+  <summary>API format export instructions</summary>
+
+![](./assets/figure01.png)
+
+Afterwards, a separate button for API format export should appear below the normal "Save" button:
+
+![](./assets/figure02.png)
+</details>
+
 ### Create a Client
 
 Use the `create_client` context manager to create a ComfyUI client. This will set up the underlying HTTP client and a WebSocket or HTTP-based state tracker to poll results from the server:
