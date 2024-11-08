@@ -87,6 +87,16 @@ async with create_client(comfyui_server, start_state_tracker=None) as client:
     image = image_items[0].image
 ```
 
+## Tests
+
+Run tests:
+
+```bash
+pytest tests
+```
+
+This will set up a local ComfyUI instance to test against.
+
 ## TODOs
 
 - [ ] Add logging support
