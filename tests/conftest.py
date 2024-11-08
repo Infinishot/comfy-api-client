@@ -73,7 +73,7 @@ def comfyui():
         p.stdin.write("python main.py --cpu --verbose\n")
         p.stdin.flush()
 
-        if not utils.check_connection("http://" + COMFY_URL, timeout=10):
+        if not utils.check_connection("http://" + COMFY_URL, timeout=30):
             raise Exception("Could not connect to ComfyUI server.")
 
         yield

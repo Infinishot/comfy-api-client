@@ -16,6 +16,7 @@ from PIL import Image as ImageFactory
 import websockets
 
 from comfy_api_client import utils
+from comfy_api_client.utils import PathLike
 
 
 class ListLikeMixin:
@@ -106,7 +107,14 @@ class ComfyExecutionError(Exception):
     pass
 
 
-class ComfyUIAPIClient:
+class ComfyAPIClient:
+    """Asynchronous client for the ComfyUI backend API.
+    
+    Args:
+        comfy_url (str): URL of the ComfyUI instance.
+        client (httpx.AsyncClient): Async HTTP client to use for requests.
+    """
+    
     def __init__(self, comfy_url: str, client: httpx.AsyncClient):
         self.comfy_url = utils.parse_url(comfy_url)
         
@@ -119,9 +127,14 @@ class ComfyUIAPIClient:
         self.websocket_handler_task = None
         self.futures = {}
 
-        self.housekeepers = []
+        self.state_trackers = []
         
-    def endpoint(self, path: str | None = None):
+    def get_endpoint_url(self, path: str | None = None):
+        """Get the full URL for an endpoint.
+        
+        Args:
+            path (str, optional): Endpoint path. Defaults to "/".
+        """
         base_url = f"{self.comfy_url.scheme}://{self.comfy_url.netloc}"
         
         if path is None:
@@ -130,29 +143,46 @@ class ComfyUIAPIClient:
         return urllib.parse.urljoin(base_url, path)
 
     async def get_index(self):
-        response = await self.client.get(self.endpoint())
+        """Get the index page of the ComfyUI instance."""
+        response = await self.client.get(self.get_endpoint_url())
         response.raise_for_status()
 
         return response.text
 
     @validate_call(validate_return=True)
     async def get_embeddings(self) -> FileList:
-        response = await self.client.get(self.endpoint("embeddings"))
+        """Get a list of available embeddings.
+        
+        Returns:
+            FileList: List of available embeddings.
+            
+        Raises:
+            httpx.HTTPStatusError: If the request fails.
+        """
+        response = await self.client.get(self.get_endpoint_url("embeddings"))
         response.raise_for_status()
 
         return response.json()
 
     @validate_call(validate_return=True)
     async def get_extensions(self) -> FileList:
-        response = await self.client.get(self.endpoint("extensions"))
+        """Get a list of available extensions.
+        
+        Returns:
+            A list of available extensions as a FileList object.
+        
+        Raises:
+            httpx.HTTPStatusError: If the request fails.
+        """
+        response = await self.client.get(self.get_endpoint_url("extensions"))
         response.raise_for_status()
 
         return response.json()
 
     def _prepare_image_upload(
-        self, name: str, image: Image | str, subfolder: str | None = None
+        self, name: str, image: Image | PathLike, subfolder: str | None = None
     ) -> ImageUploadResponse:
-        if isinstance(image, str):
+        if isinstance(image, PathLike):
             image = ImageFactory.open(image)
 
         blob = utils.image_to_buffer(image, format="png")
@@ -170,13 +200,28 @@ class ComfyUIAPIClient:
     async def upload_image(
         self,
         name: str,
-        image: Image | str,
+        image: Image | PathLike,
         subfolder: str | None = None,
         overwrite: bool = True,
         type: ImageTypes = "input",
     ) -> ImageUploadResponse:
+        """Upload an image to the ComfyUI instance.
+        
+        Args:
+            name (str): Name of the image.
+            image (Image | str | Path): Image to upload. Can be a PIL Image or a path to an image file.
+            subfolder (str, optional): Subfolder to upload the image to. Defaults to no subfolder.
+            overwrite (bool, optional): Whether to overwrite an existing image with the same name. Defaults to True.
+            type (ImageTypes, optional): Type of the image. Defaults to "input".
+            
+        Returns:
+            ImageUploadResponse: Information about the uploaded image
+        
+        Raises:
+            httpx.HTTPStatusError: If the request fails.
+        """
         response = await self.client.post(
-            self.endpoint("/upload/image"),
+            self.get_endpoint_url("/upload/image"),
             data={"overwrite": overwrite, "type": type},
             files=self._prepare_image_upload(name, image, subfolder),
         )
@@ -187,17 +232,33 @@ class ComfyUIAPIClient:
     async def upload_mask(
         self,
         name: str,
-        image: Image | str,
+        image: Image | PathLike,
         original_reference: ImageUploadResponse,
         subfolder: str | None = None,
         overwrite: bool = True,
         type: ImageTypes = "input",
     ) -> ImageUploadResponse:
+        """Upload a mask image to the ComfyUI instance.
+        
+        Args:
+            name (str): Name of the image.
+            image (Image | str | Path): Image to upload. Can be a PIL Image or a path to an image file.
+            original_reference (ImageUploadResponse): Reference to the original image.
+            subfolder (str, optional): Subfolder to upload the image to. Defaults to no subfolder.
+            overwrite (bool, optional): Whether to overwrite an existing image with the same name. Defaults to True.
+            type (ImageTypes, optional): Type of the image. Defaults to "input".
+        
+        Returns:
+            ImageUploadResponse: Information about the uploaded image
+            
+        Raises:
+            httpx.HTTPStatusError: If the request fails.
+        """
         original_reference = original_reference.model_dump()
         original_reference["filename"] = original_reference.pop("name")
 
         response = await self.client.post(
-            self.endpoint("/upload/mask"),
+            self.get_endpoint_url("/upload/mask"),
             data={
                 "overwrite": overwrite,
                 "type": type,
@@ -215,6 +276,19 @@ class ComfyUIAPIClient:
         subfolder: str | None = None,
         type: ImageTypes | None = None,
     ) -> ImageItem | None:
+        """Retrieve an image from the ComfyUI instance.
+        
+        Args:
+            filename (str): Name of the image.
+            subfolder (str, optional): Subfolder to retrieve the image from. Defaults to no subfolder.
+            type: (ImageTypes, optional): Type of the image. Defaults to None.
+        
+        Returns:
+            ImageItem: Image item containing the image, filename and format.
+        
+        Raises:
+            httpx.HTTPStatusError: If the request fails.
+        """
         params = {
             "filename": filename,
         }
@@ -226,7 +300,7 @@ class ComfyUIAPIClient:
             params["type"] = type
 
         response = await self.client.get(
-            self.endpoint("/view"), params=params
+            self.get_endpoint_url("/view"), params=params
         )
 
         if response.status_code == 404:
@@ -246,10 +320,22 @@ class ComfyUIAPIClient:
         )
 
     async def retrieve_metadata(self, folder_name: str, filename: str) -> dict | None:
+        """Retrieve metadata for a file in a folder.
+        
+        Args:
+            folder_name (str): Name of the folder.
+            filename (str): Name of the file.
+            
+        Returns:
+            dict: Metadata for the file.
+        
+        Raises:
+            httpx.HTTPStatusError: If the request fails.
+        """
         folder_name_encoded = urllib.parse.quote_plus(folder_name)
 
         response = await self.client.get(
-            self.endpoint(f"/view_metadata/{folder_name_encoded}"),
+            self.get_endpoint_url(f"/view_metadata/{folder_name_encoded}"),
             params={"filename": filename},
         )
 
@@ -261,7 +347,15 @@ class ComfyUIAPIClient:
         return response.json()
 
     async def get_system_stats(self) -> SystemStats:
-        response = await self.client.get(self.endpoint("/system_stats"))
+        """Get system statistics.
+        
+        Returns:
+            SystemStats: System statistics.
+        
+        Raises:
+            httpx.HTTPStatusError: If the request fails.
+        """
+        response = await self.client.get(self.get_endpoint_url("/system_stats"))
         response.raise_for_status()
 
         return SystemStats(**response.json())
@@ -275,7 +369,21 @@ class ComfyUIAPIClient:
     async def get_history(
         self, prompt_id: str | None = None, max_items: int | None = None
     ) -> dict:
-        endpoint = self.endpoint("/history")
+        """Get the history of prompts.
+        
+        TODO: Implement proper schema for history.
+        
+        Args:
+            prompt_id (str, optional): ID of the prompt to retrieve. Defaults to None in which case information about all prompts is returned.
+            max_items (int, optional): Maximum number of items to return. Defaults to None.
+        
+        Returns:
+            dict: History of prompts.
+        
+        Raises:
+            httpx.HTTPStatusError: If the request fails.
+        """
+        endpoint = self.get_endpoint_url("/history")
 
         if prompt_id:
             endpoint += f"/{prompt_id}"
@@ -292,6 +400,12 @@ class ComfyUIAPIClient:
         return response.json()
 
     async def get_completed_prompts(self):
+        """Get a list of completed prompts.
+        
+        Returns:
+            dict: Completed prompts in the form {<prompt_id>: <prompt_data>}.
+            
+            Raises:"""
         history = await self.get_history()
 
         return {
@@ -301,7 +415,15 @@ class ComfyUIAPIClient:
         }
 
     async def get_queue(self) -> QueueState:
-        response = await self.client.get(self.endpoint("/queue"))
+        """Get the current queue state.
+        
+        Returns:
+            QueueState: Queue state.
+            
+        Raises:
+            httpx.HTTPStatusError: If the request fails.
+        """
+        response = await self.client.get(self.get_endpoint_url("/queue"))
         response.raise_for_status()
 
         data = response.json()
@@ -322,7 +444,25 @@ class ComfyUIAPIClient:
             running=list(map(parse_queue_entry, data["queue_running"])),
         )
 
-    async def fetch_results(self, prompt_id: str) -> PromptResult:
+    async def fetch_results(self, prompt: str | PromptResponse) -> PromptResult:
+        """Fetch the results of a prompt.
+        
+        Args:
+            prompt (str | Prompt): ID of the prompt or Prompt object.
+            
+        Returns:
+            PromptResult: Results of the prompt.
+            
+        Raises:
+            httpx.HTTPStatusError: If the request fails.
+        """
+        if isinstance(prompt, PromptResponse):
+            prompt_id = prompt.prompt_id
+        elif isinstance(prompt, str):
+            prompt_id = prompt
+        else:
+            raise ValueError(f"Invalid prompt type: {type(prompt)}")
+        
         output_images = []
 
         history = await self.get_history(prompt_id=prompt_id)
@@ -346,34 +486,34 @@ class ComfyUIAPIClient:
 
         return PromptResult(prompt_id=prompt_id, output_images=output_images)
 
-    async def get_future(self, prompt_id: str):
+    async def _get_future(self, prompt_id: str):
         return self.futures.get(prompt_id)
 
-    async def get_future_with_retry(self, prompt_id: str):
-        get_future = utils.async_retry_fn(self.get_future)
+    async def _get_future_with_retry(self, prompt_id: str):
+        get_future = utils.async_retry_fn(self._get_future)
         return await get_future(prompt_id)
 
-    # @property
-
-    async def stop_websocket_handler(self):
-        if not self.is_websocket_handler_running:
-            warnings.warn("Websocket handler is not running")
-            return
-
-        self.websocket_handler_task.cancel()
-
-        try:
-            await self.websocket_handler_task
-        except asyncio.CancelledError:
-            pass
-
-    async def enqueue_workflow(
+    async def submit_workflow(
         self, workflow: dict, return_future: bool = True
     ) -> PromptResponse:
+        """Enqueue a workflow for execution.
+        
+        TODO: Implement proper schema for workflow.
+        
+        Args:
+            workflow (dict): Workflow to enqueue.
+            return_future (bool, optional): Whether to return a future that will be set with the results of the prompt. Defaults to True.
+        
+        Returns:
+            PromptResponse: Information about the prompt.
+            
+        Raises:
+            httpx.HTTPStatusError: If the request fails.
+        """
         if return_future:
-            if not any([keeper.is_running for keeper in self.housekeepers]):
+            if not any([tracker.is_running for tracker in self.state_trackers]):
                 warnings.warn(
-                    "enqueue_workflow has been called with return_future=True, but no housekeeper is running. "
+                    "enqueue_workflow has been called with return_future=True, but no state tracker is running. "
                     "Results might therefore not be received and have to be requested manually."
                 )
 
@@ -381,7 +521,7 @@ class ComfyUIAPIClient:
             future = loop.create_future()
 
         response = await self.client.post(
-            self.endpoint("/prompt"),
+            self.get_endpoint_url("/prompt"),
             json={"prompt": workflow, "client_id": self.client_id},
         )
         response.raise_for_status()
@@ -394,52 +534,62 @@ class ComfyUIAPIClient:
 
         return prompt_info
 
-    async def clear_queue(self):
+    async def clear_queue(self) -> None:
+        """Clear the prompt queue."""
         response = await self.client.post(
-            self.endpoint("/queue"), json={"clear": True}
+            self.get_endpoint_url("/queue"), json={"clear": True}
         )
         response.raise_for_status()
 
-    async def cancel_prompts(self, prompt_ids: list[str]):
+    async def cancel_prompts(self, prompt_ids: list[str]) -> None:
+        """Cancel prompts in the queue.
+        
+        Args:
+            prompt_ids (list[str]): List of prompt IDs to cancel.
+        """
         response = await self.client.post(
-            self.endpoint("/queue"), json={"cancel": prompt_ids}
+            self.get_endpoint_url("/queue"), json={"cancel": prompt_ids}
         )
         response.raise_for_status()
 
-    async def interrupt_processing(self):
-        response = await self.client.post(self.endpoint("/interrupt"))
+    async def interrupt_processing(self) -> None:
+        response = await self.client.post(self.get_endpoint_url("/interrupt"))
         response.raise_for_status()
 
-    async def free_memory(self, unload_models: bool = False, free_memory: bool = False):
+    async def free_memory(self, unload_models: bool = False, free_memory: bool = False) -> None:
         response = await self.client.post(
-            self.endpoint("/free"),
+            self.get_endpoint_url("/free"),
             json={"unload_models": unload_models, "free_memory": free_memory},
         )
         response.raise_for_status()
 
-    async def clear_history(self):
+    async def clear_history(self) -> None:
         response = await self.client.post(
-            self.endpoint("/history"), json={"clear": True}
+            self.get_endpoint_url("/history"), json={"clear": True}
         )
         response.raise_for_status()
 
-    async def remove_from_history(self, prompt_ids: list[str]):
+    async def remove_from_history(self, prompt_ids: list[str]) -> None:
         response = await self.client.post(
-            self.endpoint("/history"), json={"delete": prompt_ids}
+            self.get_endpoint_url("/history"), json={"delete": prompt_ids}
         )
         response.raise_for_status()
 
-    def register_housekeeper(self, housekeeper: "BaseComfyClientHousekeeper"):
-        self.housekeepers.append(housekeeper)
+    def register_state_tracker(self, state_tracker: "BaseComfyStateTracker") -> None:
+        self.state_trackers.append(state_tracker)
 
-    def remove_housekeeper(self, housekeeper: "BaseComfyClientHousekeeper"):
-        self.housekeepers.remove(housekeeper)
+    def remove_state_tracker(self, state_tracker: "BaseComfyStateTracker") -> None:
+        self.state_trackers.remove(state_tracker)
 
 
-class BaseComfyClientHousekeeper(abc.ABC):
-    def __init__(self, client: ComfyUIAPIClient):
+class BaseComfyStateTracker(abc.ABC):
+    """Base class for Comfy state trackers.
+    
+    A state tracker is responsible for tracking the state of prompts and their results and updating 
+    futures in the client accordingly.
+    """
+    def __init__(self, client: ComfyAPIClient):
         self.client = client
-        self.client.register_housekeeper(self)
 
     @abc.abstractmethod
     async def start():
@@ -450,10 +600,17 @@ class BaseComfyClientHousekeeper(abc.ABC):
         pass
 
 
-class WebsocketComfyClientHousekeeper(BaseComfyClientHousekeeper):
+class WebsocketStateTracker(BaseComfyStateTracker):
+    """State tracker that uses a websocket to track prompt state.
+    
+    Args:
+        client (ComfyAPIClient): Comfy client to keep track of.
+        use_secure_websocket (bool, optional): Whether to use a secure websocket. Defaults to False.
+        **websocket_connect_kwargs: Additional keyword arguments to pass to the websocket connect function.
+    """
     def __init__(
         self,
-        client: ComfyUIAPIClient,
+        client: ComfyAPIClient,
         use_secure_websocket: bool = False,
         **websocket_connect_kwargs,
     ):
@@ -506,6 +663,8 @@ class WebsocketComfyClientHousekeeper(BaseComfyClientHousekeeper):
             self.websocket = None
 
     async def start(self):
+        self.client.register_state_tracker(self)
+        
         if self.is_running:
             return
 
@@ -513,6 +672,8 @@ class WebsocketComfyClientHousekeeper(BaseComfyClientHousekeeper):
         self.run_task = asyncio.get_event_loop().create_task(self.run())
 
     async def stop(self):
+        self.client.remove_state_tracker(self)
+        
         if self.websocket is None:
             warnings.warn("Websocket is not open")
         else:
@@ -523,8 +684,14 @@ class WebsocketComfyClientHousekeeper(BaseComfyClientHousekeeper):
         self.is_running = False
 
 
-class RestAPIComfyClientHousekeeper(BaseComfyClientHousekeeper):
-    def __init__(self, client: ComfyUIAPIClient, update_interval: float = 0.5):
+class HTTPStateTracker(BaseComfyStateTracker):
+    """State tracker that uses the REST API to track prompt state.
+    
+    Args:
+        client (ComfyAPIClient): Comfy client to keep track of.
+        update_interval (float, optional): Interval in seconds to update the prompt state. Defaults to 0.1.
+    """
+    def __init__(self, client: ComfyAPIClient, update_interval: float = 0.1):
         super().__init__(client)
 
         self.update_interval = update_interval
@@ -540,7 +707,7 @@ class RestAPIComfyClientHousekeeper(BaseComfyClientHousekeeper):
 
         for prompt_id, result in history.items():
             if prompt_id in self.client.futures:
-                future = await self.client.get_future(prompt_id)
+                future = await self.client._get_future(prompt_id)
 
                 if future and not future.done():
                     status = result["status"]
@@ -565,7 +732,7 @@ class RestAPIComfyClientHousekeeper(BaseComfyClientHousekeeper):
         self.is_running = True
         self.current_update_task = asyncio.get_event_loop().create_task(self.update())
 
-        self.client.register_housekeeper(self)
+        self.client.register_state_tracker(self)
 
     async def stop(self):
         self.is_running = False
@@ -573,47 +740,62 @@ class RestAPIComfyClientHousekeeper(BaseComfyClientHousekeeper):
         if self.current_update_task is not None:
             await self.current_update_task
 
-        self.client.remove_housekeeper(self)
+        self.client.remove_state_tracker(self)
 
 
-housekeeper_implementations = {
-    "websocket": WebsocketComfyClientHousekeeper,
-    "rest": RestAPIComfyClientHousekeeper,
+state_tracker_implementations = {
+    "websocket": WebsocketStateTracker,
+    "http": HTTPStateTracker,
 }
 
 
-async def create_comfy_client_housekeeper(client, name: str, **housekeeper_kwargs):
-    cls = housekeeper_implementations.get(name)
+async def create_comfy_state_tracker(client, name: str, **state_tracker_kwargs):
+    """Create a Comfy state tracker.
+    
+    Args:
+        client (ComfyAPIClient): Comfy client to keep track of.
+        name (str): Name of the state tracker to create.
+        **state_tracker_kwargs: Additional keyword arguments to pass to the state tracker constructor.
+    """
+    cls = state_tracker_implementations.get(name)
 
     if cls is None:
         raise ValueError(
-            f"Unknown Comfy client housekeeper '{name}'. Valid options are {list(housekeeper_implementations)}"
+            f"Unknown Comfy client state tracker '{name}'. Valid options are {list(state_tracker_implementations)}"
         )
 
-    housekeeper = cls(client=client, **housekeeper_kwargs)
-    await housekeeper.start()
+    state_tracker = cls(client=client, **state_tracker_kwargs)
+    await state_tracker.start()
 
-    return housekeeper
+    return state_tracker
 
 
 @asynccontextmanager
 async def create_client(
     comfy_url: str,
     http_timeout: float | None = 30.0,
-    start_housekeeper: Literal["websocket", "rest"] | None = "websocket",
-    housekeeper_kwargs: dict | None = None,
-) -> AsyncGenerator[ComfyUIAPIClient, None]:
+    start_state_tracker: Literal["websocket", "http"] | None = "websocket",
+    state_tracker_kwargs: dict | None = None,
+) -> AsyncGenerator[ComfyAPIClient, None]:
+    """Create a ComfyUI client.
+    
+    Args:
+        comfy_url (str): URL of the ComfyUI server.
+        http_timeout (float, optional): Timeout for HTTP requests. Defaults to 30.0.
+        start_state_tracker (Literal["websocket", "http"], optional): State tracker to start. Defaults to "websocket".
+        state_tracker_kwargs (dict, optional): Additional keyword arguments to pass to the state tracker constructor.
+    """
     async with httpx.AsyncClient(timeout=http_timeout) as client:
-        client = ComfyUIAPIClient(comfy_url, client)
+        client = ComfyAPIClient(comfy_url, client)
         
         await client.get_index()
 
-        if start_housekeeper is not None:
-            await create_comfy_client_housekeeper(
-                client, start_housekeeper, **(housekeeper_kwargs or {})
+        if start_state_tracker is not None:
+            await create_comfy_state_tracker(
+                client, start_state_tracker, **(state_tracker_kwargs or {})
             )
         try:
             yield client
         finally:
-            for housekeeper in client.housekeepers:
-                await housekeeper.stop()
+            for state_tracker in client.state_trackers:
+                await state_tracker.stop()

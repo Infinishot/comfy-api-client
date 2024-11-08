@@ -5,10 +5,13 @@ import random
 import requests
 import time
 import io
-
+from pathlib import Path
 from PIL.Image import Image
 from urllib.parse import urlparse, ParseResult as URLParseResult
 from comfy_api_client import constants
+
+
+PathLike = str | Path
 
 
 def check_connection(url, delay=0.5, timeout=10):
@@ -145,3 +148,9 @@ def parse_url(url: str, default_scheme="http") -> URLParseResult:
         return parse_url(f"{default_scheme}://{url}")
     
     return parsed
+
+
+def read_json(path: PathLike):
+    path = Path(path)
+    with path.open("r") as f:
+        return json.load(f)
