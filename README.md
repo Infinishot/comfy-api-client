@@ -40,11 +40,13 @@ To submit a workflow, read the workflow configuration file and pass it to the cl
 from comfy_api_client import utils
 
 workflow = utils.read_json("workflow.json")
-prompt = await client.submit_workflow(workflow)
 
-result = await prompt.future
-image_items = result.output_images
-image = image_items[0].image
+async with create_client(comfyui_server) as client:
+    prompt = await client.submit_workflow(workflow)
+
+    result = await prompt.future
+    image_items = result.output_images
+    image = image_items[0].image
 ```
 
 ## Result polling
